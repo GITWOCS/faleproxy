@@ -1,11 +1,9 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const execAsync = promisify(exec);
 const { sampleHtmlWithYale } = require('./test-utils');
 const nock = require('nock');
 const http = require('http');
+const app = require('../app');
 
 // Set a different port for testing to avoid conflict with the main app
 const TEST_PORT = 3099;
@@ -34,29 +32,20 @@ describe('Integration Tests', () => {
       });
     });
 
-    // Create a temporary test app file
-    await execAsync('cp app.js app.test.js');
-    await execAsync(`sed -i '' 's/const PORT = 3001/const PORT = ${TEST_PORT}/' app.test.js`);
-    
-    // Start the test server
-    server = require('child_process').spawn('node', ['app.test.js'], {
-      detached: true,
-      stdio: 'ignore'
+    // Start the app server on the test port
+    server = await new Promise(resolve => {
+      const listener = app.listen(TEST_PORT, () => resolve(listener));
     });
-    
-    // Give the server time to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
   }, 10000); // Increase timeout for server startup
 
   afterAll(async () => {
     // Kill the test server and clean up
-    if (server && server.pid) {
-      process.kill(-server.pid);
+    if (server) {
+      await new Promise(resolve => server.close(resolve));
     }
     if (mockContentServer) {
       await new Promise(resolve => mockContentServer.close(resolve));
     }
-    await execAsync('rm app.test.js');
     nock.cleanAll();
     nock.enableNetConnect();
   });
