@@ -5,10 +5,13 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const { sampleHtmlWithYale } = require('./test-utils');
 const nock = require('nock');
+const http = require('http');
 
 // Set a different port for testing to avoid conflict with the main app
 const TEST_PORT = 3099;
 let server;
+let mockContentServer;
+let mockContentBaseUrl;
 
 describe('Integration Tests', () => {
   // Modify the app to use a test port
@@ -16,7 +19,21 @@ describe('Integration Tests', () => {
     // Mock external HTTP requests
     nock.disableNetConnect();
     nock.enableNetConnect('127.0.0.1');
-    
+
+    // Start a local HTTP server to serve the sample Yale HTML
+    mockContentServer = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(sampleHtmlWithYale);
+    });
+
+    await new Promise(resolve => {
+      mockContentServer.listen(0, '127.0.0.1', () => {
+        const { port } = mockContentServer.address();
+        mockContentBaseUrl = `http://127.0.0.1:${port}`;
+        resolve();
+      });
+    });
+
     // Create a temporary test app file
     await execAsync('cp app.js app.test.js');
     await execAsync(`sed -i '' 's/const PORT = 3001/const PORT = ${TEST_PORT}/' app.test.js`);
@@ -36,20 +53,18 @@ describe('Integration Tests', () => {
     if (server && server.pid) {
       process.kill(-server.pid);
     }
+    if (mockContentServer) {
+      await new Promise(resolve => mockContentServer.close(resolve));
+    }
     await execAsync('rm app.test.js');
     nock.cleanAll();
     nock.enableNetConnect();
   });
 
   test('Should replace Yale with Fale in fetched content', async () => {
-    // Setup mock for example.com
-    nock('https://example.com')
-      .get('/')
-      .reply(200, sampleHtmlWithYale);
-    
-    // Make a request to our proxy app
-    const response = await axios.post(`http://localhost:${TEST_PORT}/fetch`, {
-      url: 'https://example.com/'
+    // Make a request to our proxy app using the local mock content server
+    const response = await axios.post(`http://127.0.0.1:${TEST_PORT}/fetch`, {
+      url: `${mockContentBaseUrl}/`
     });
     
     expect(response.status).toBe(200);
@@ -78,7 +93,7 @@ describe('Integration Tests', () => {
 
   test('Should handle invalid URLs', async () => {
     try {
-      await axios.post(`http://localhost:${TEST_PORT}/fetch`, {
+      await axios.post(`http://127.0.0.1:${TEST_PORT}/fetch`, {
         url: 'not-a-valid-url'
       });
       // Should not reach here
@@ -90,7 +105,7 @@ describe('Integration Tests', () => {
 
   test('Should handle missing URL parameter', async () => {
     try {
-      await axios.post(`http://localhost:${TEST_PORT}/fetch`, {});
+      await axios.post(`http://127.0.0.1:${TEST_PORT}/fetch`, {});
       // Should not reach here
       expect(true).toBe(false);
     } catch (error) {
